@@ -144,6 +144,50 @@ void printModeInfoArray(int numModeInfoArrayElements, DISPLAYCONFIG_MODE_INFO *m
     }
 }
 
+void printActiveDisplayInfo(int numPathArrayElements, DISPLAYCONFIG_PATH_INFO *pathArray,
+                            int numModeInfoArrayElements, DISPLAYCONFIG_MODE_INFO *modeInfoArray) {
+    puts("Connected Active Monitor Info");
+    puts("(Position Y increases downwards)");
+    for (int i = 0; i < numPathArrayElements; ++i) {
+        DISPLAYCONFIG_PATH_INFO currentPath = pathArray[i];
+        if (!(DISPLAYCONFIG_PATH_ACTIVE & currentPath.flags)) continue;
+
+        printf("Monitor Id: %d\n", currentPath.sourceInfo.id);
+        for (int i = 0; i < numModeInfoArrayElements; ++i) {
+            DISPLAYCONFIG_MODE_INFO currentModeInfo = modeInfoArray[i];
+            if (currentModeInfo.id != currentPath.sourceInfo.id) continue;
+            printf("Position: (%d, %d)\n",
+                    currentModeInfo.sourceMode.position.x,
+                    currentModeInfo.sourceMode.position.y
+            );
+            break;
+        }
+        for (int i = 0; i < numModeInfoArrayElements; ++i) {
+            DISPLAYCONFIG_MODE_INFO currentModeInfo = modeInfoArray[i];
+            if (currentModeInfo.id != currentPath.targetInfo.id) continue;
+            printf("Resolution: %dx%d\n",
+                    currentModeInfo.targetMode.targetVideoSignalInfo.activeSize.cx,
+                    currentModeInfo.targetMode.targetVideoSignalInfo.activeSize.cy
+            );
+            break;
+        }
+        double refreshRateNumerator = (double) currentPath.targetInfo.refreshRate.Numerator;
+        double refreshRateDenominator = (double) currentPath.targetInfo.refreshRate.Denominator;
+        printf("Refresh Rate: %.6f\n", refreshRateNumerator / refreshRateDenominator);
+        int outputTech = currentPath.targetInfo.outputTechnology;
+        if (outputTech == DISPLAYCONFIG_OUTPUT_TECHNOLOGY_HDMI) {
+            puts("Output Technology: HDMI");
+        } else if (outputTech == DISPLAYCONFIG_OUTPUT_TECHNOLOGY_DVI) {
+            puts("Output Technology: DVI");
+        } else if (outputTech == DISPLAYCONFIG_OUTPUT_TECHNOLOGY_DISPLAYPORT_EXTERNAL) {
+            puts("Output Technology: Display Port");
+        } else {
+            puts("Output Technology: Other");
+        }
+        puts("");
+    }
+}
+
 int wasSuccessful(int result, char* methodName) {
     if (result != ERROR_SUCCESS) {
         printf("Could not %s, Error Code %d", methodName, result);
@@ -162,14 +206,15 @@ int wasSuccessful(int result, char* methodName) {
 }
 
 void setDisplayConfigTopologySupplied(int numPathArrayElements, DISPLAYCONFIG_PATH_INFO *pathArray) {
-    int result = SetDisplayConfig(numPathArrayElements, pathArray, 0, NULL, SDC_VALIDATE | SDC_TOPOLOGY_SUPPLIED);
+    int sharedConfigFlags = SDC_TOPOLOGY_SUPPLIED | SDC_ALLOW_PATH_ORDER_CHANGES;
+    int result = SetDisplayConfig(numPathArrayElements, pathArray, 0, NULL, SDC_VALIDATE | sharedConfigFlags);
     if (!wasSuccessful(result, "SDC_VALIDATE SetDisplayConfig")) {
         return;
     } else {
         printf("VALID CONFIG\n");
     }
 
-    result = SetDisplayConfig(numPathArrayElements, pathArray, 0, NULL, SDC_APPLY | SDC_TOPOLOGY_SUPPLIED);
+    result = SetDisplayConfig(numPathArrayElements, pathArray, 0, NULL, SDC_APPLY | sharedConfigFlags);
     if (!wasSuccessful(result, "SDC_APPLY SetDisplayConfig")) {
         return;
     } else {
@@ -179,6 +224,7 @@ void setDisplayConfigTopologySupplied(int numPathArrayElements, DISPLAYCONFIG_PA
 
 void enableMonitor(int sourceId, int numPathArrayElements, DISPLAYCONFIG_PATH_INFO *pathArray) {
     int activeMonitors[MAX_ACTIVE_SOURCES];
+    int numActiveSources = 0;
     for (int i = 0; i < numPathArrayElements; i++) {
         if (!pathArray[i].targetInfo.targetAvailable) {
             continue;
@@ -190,6 +236,7 @@ void enableMonitor(int sourceId, int numPathArrayElements, DISPLAYCONFIG_PATH_IN
                 return;
             }
             activeMonitors[pathArray[i].sourceInfo.id] = pathArray[i].targetInfo.id;
+            numActiveSources++;
         }
     }
 
@@ -208,7 +255,7 @@ void enableMonitor(int sourceId, int numPathArrayElements, DISPLAYCONFIG_PATH_IN
             continue;
         }
 
-        for (int j = 0; j < MAX_ACTIVE_SOURCES; j++) {
+        for (int j = 0; j < numActiveSources; j++) {
             if (activeMonitors[j] == pathArray[i].targetInfo.id) {
                 goto continueLable;
             }
@@ -305,12 +352,14 @@ int validSourceId(int sourceId, int numPathArrayElements, DISPLAYCONFIG_PATH_INF
 int main(int argc, char *argv[]) {
     int forceEnable = 0;    
     int forceDisable = 0;    
+    int shouldPrintDisplayInfo = 0;
     int debug = 0;    
     int monitorSource = -1;
     if (argc == 1) {
         printf("Required Args: Monitor source as integer\n");
         printf("Optional Args: -e or -d to force enable or disable of monitor explicitly (default is toggle)\n");
-        printf("Optional Args: -debug print full display config\n");
+        printf("Optional Args: -i to print active display info\n");
+        printf("Optional Args: -debug to print full display config\n");
         return 1;
     }
 
@@ -320,6 +369,8 @@ int main(int argc, char *argv[]) {
             forceEnable = 1;
         } else if (strcmp(argv[i], "-d") == 0) {
             forceDisable = 1;
+        } else if (strcmp(argv[i], "-i") == 0) {
+            shouldPrintDisplayInfo = 1;
         } else if (strcmp(argv[i], "-debug") == 0) {
             debug = 1;
         } else {
@@ -331,7 +382,7 @@ int main(int argc, char *argv[]) {
         }
     }
 
-    if (!debug && monitorSource < 0) {
+    if (!debug && !shouldPrintDisplayInfo && monitorSource < 0) {
         printf("Required Args: Monitor source as integer\n");
         return 1;
     }
@@ -370,6 +421,14 @@ int main(int argc, char *argv[]) {
         puts("########################################################");
         printModeInfoArray(numModeInfoArrayElements, modeInfoArray);
         return 0;
+    }
+    
+    if (shouldPrintDisplayInfo) {
+        printActiveDisplayInfo(numPathArrayElements, pathArray, numModeInfoArrayElements, modeInfoArray);
+        if (monitorSource < 0) {
+            puts("No monitor ID provided exiting");
+            return 0;
+        }
     }
 
     if(!validSourceId(monitorSource, numPathArrayElements, pathArray)) {
